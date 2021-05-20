@@ -1,0 +1,471 @@
+---
+title: "Analysis of climate change related articles"
+author: "Fanni Kiss"
+date: '2021 05 19 '
+output: 
+  rmarkdown::html_document:
+    code_folding: hide
+    theme: journal
+    
+    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+
+```{r}
+library(tidyr)
+library(data.table)
+library(rvest)
+library(jsonlite)
+library(dplyr)
+library(data.table)
+# install.packages("tidytext")
+library(tidytext)
+# install.packages("rlang")
+library(rlang)
+library(tidyverse)
+library(readr)
+library(ggplot2)
+library(stringr)
+library(scales)
+# install.packages("textdata")
+library(textdata)
+library(forcats)
+# installed.packages("igraph")
+library(igraph)
+# installed.packages("ggraph")
+library(ggraph)
+# install.packages("topicmodels")
+library(topicmodels)
+# install.packages("reshape2")
+library(reshape2)
+```
+
+
+## Introduction
+
+The Intergovernmental Panel on Climate Change (IPCC) has released a special report in October, 2018 on the impacts of global warming of 1.5 °C above pre-industrial levels. The report had echoed in the media and the 1.5 °C temperature increase became a central topic of global warming. My impression is that the IPCC report affected the narrative of climate change and public opinion is more pessimistic about the Earth's (and humans') future. Even an expression, climate anxiety, has widespread, which shows that some people might have more negative feelings from the global warming process.
+
+My assumption is that online media can be a proxy of public opinion and sentiment. Thus, I will analyze text of online articles and compare two groups: articles before IPCC report (pre_IPCC) and after the IPCC report (post_IPCC). 
+
+## Data source
+
+Current report analyzes articles from one online medium, The Guardian. Thus, current report is not representative, but can provide a snippet about the effect of IPCC report in climate change related articles.
+
+The articles are scraped via The Guardian API. The result contains articles, where the words "climate" and "change" has appeared. The code of the data collection is available on [GitHub](https://github.com/fanni-k/Unstructured_text_analysis). There are two time groups to compare: pre_IPCC represents articles, which were published before IPCC's special report and post_IPCC represent the ones, which were published afterwards. Both of the time groups cover the same amount of time (3 months) from the same period of the year. As the IPCC report has been released in October, 2018, the post_IPCC group cover the time period between 2018-10-01 and 2019-01-01. The pre_IPCC time group is between 2017-10-01 and 2018-01-01. The scope of the time period was narrowed because of computation capacity. The time period extension can be a base for further analysis.
+
+The scraped and prepared data set contains 2750 articles in the structure below:
+
+```{r}
+urlfile = "https://raw.githubusercontent.com/fanni-k/Unstructured_text_analysis/main/Scrape_articles/Data/guardian_climate_change5.csv"
+df <-read_csv(url(urlfile))
+head(df)
+```
+
+## Unstructured text analysis
+
+The text analysis of the articles attempts to answer the next questions:
+* Which sentiment lexicon fits the most to the analysis?
+* What sentiments characterize climate change related articles in each group?
+* What are the significant terms in climate change related articles in each group?
+* What is the context of climate change related articles in each group?
+* What topics can be separated in each group?
+
+### Exploratory data analysis
+
+The data need to be stored in tidytext format. Frequent words, such as "the" or "to" need to be removed by using "stop_words". The most common words in the data set are shown below:
+
+```{r}
+tidy_df <- df %>% tidytext::unnest_tokens(word, text)
+data("stop_words")
+tidy_df2 <- tidy_df %>% anti_join(stop_words)
+tidy_df2 %>% count(word, sort = TRUE) %>%
+  filter(n > 3000) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word)) +
+  geom_col() +
+  labs(y = NULL, x = "Word frequency", title = "The most common words in the data set", caption = "Source: The Guardian")
+```
+
+The scatterplot below shows the proportion of words in each group. The word "climate" is the most frequented word in each group. The word "IPCC" is more frequented in the post_IPCC group.
+
+```{r}
+# calculate the frequency for each word by time_group
+## pre_IPCC
+frequency1 <- tidy_df2 %>% 
+  filter(time_group == 'pre_IPCC') %>% 
+  mutate(word = str_extract(word, "[a-z']+")) %>%
+  count(word) %>% 
+  mutate(pre_IPCC_proportion = n / sum(n)) %>% 
+  select(-n)
+
+# post_IPCC
+frequency2 <- tidy_df2 %>% 
+  filter(time_group == 'post_IPCC') %>% 
+  mutate(word = str_extract(word, "[a-z']+")) %>%
+  count(word) %>% 
+  mutate(post_IPCC_proportion = n / sum(n)) %>% 
+  select(-n) 
+
+frequency <- inner_join(frequency1, frequency2, by = 'word')
+
+# View(head(frequency))
+
+# visualize word frequency of common words in the two time groups
+
+ggplot(frequency, aes(x = pre_IPCC_proportion, y = post_IPCC_proportion)) +
+  geom_abline(color = "#1c9099", lty = 2) +
+  geom_jitter(alpha = 0.1, size = 2.5, width = 0.3, height = 0.3) +
+  geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5) +
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  scale_colour_gradient(limits = c(0, 0.001), 
+                        low = "darkslategray4", high = "gray75") +
+  theme(legend.position="none") +
+  labs(y = "Proportion of words in post-IPCC group", x = "Proportion of words in pre-IPCC group", caption = "Source: The Guardian")
+
+```
+
+
+### Comparison of sentiment lexicons
+
+There are three lexicons to analyze sentiments in texts. The figure below compares the three lexicons on the same text data. The articles arranged in chronological order, thus the first half of the histograms are pre_IPCC and the second half is post_IPCC group. We can observe a negative sentiment in the 16th index, which is probably not right after the IPCC report release. 
+
+```{r}
+# sentiment analysis
+
+tidy_time_groups <- df %>% arrange(publication_date) %>% 
+  group_by(time_group) %>% 
+  mutate(linenumber = row_number()) %>% 
+  ungroup() %>% 
+  unnest_tokens(word, text)
+
+# 1) comparing the three sentiment dictionaries
+afinn <- tidy_time_groups %>%  inner_join(get_sentiments("afinn")) %>% 
+  group_by(index = linenumber %/% 80) %>% 
+  summarise(sentiment = sum(value)) %>% 
+  mutate(method = "AFINN")
+
+bing_and_nrc <- bind_rows(
+  tidy_time_groups %>% 
+    inner_join(get_sentiments("bing")) %>%
+    mutate(method = "Bing et al."),
+  tidy_time_groups %>% 
+    inner_join(get_sentiments("nrc") %>% 
+                 filter(sentiment %in% c("positive", 
+                                         "negative"))
+    ) %>%
+    mutate(method = "NRC")) %>%
+  count(method, index = linenumber %/% 80, sentiment) %>%
+  pivot_wider(names_from = sentiment,
+              values_from = n,
+              values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+
+bind_rows(afinn, 
+          bing_and_nrc) %>%
+  ggplot(aes(index, sentiment, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~method, ncol = 1, scales = "free_y")
+```
+
+### Sentiment analysis 
+
+For the sentiment analysis, I select the AFINN lexicon, as it shows large variance and extends on a large scale (0-3000). We can see that climate change related articles reach lower value in the sentiment analysis within the post_IPCC group. It means, that climate change related articles were more negative after the IPCC report release, compared to the pre_IPCC group. 
+
+```{r}
+
+# 2) sentiment analysis in pre_IPCC and post_IPCC
+
+afinn_time_group <- tidy_time_groups %>%  inner_join(get_sentiments("afinn")) %>% 
+  group_by(time_group, index = linenumber %/% 80) %>% 
+  summarise(sentiment = sum(value)) %>% 
+  mutate(method = "AFINN")
+
+afinn_time_group %>% filter(time_group == 'pre_IPCC') %>% ggplot(aes(x = index, y = sentiment, fill = method)) +
+  geom_col(show.legend = FALSE) + labs(title = "Sentiment Analysis by AFINN lexicon", 
+                                       subtitle = "pre_IPCC group",
+                                       caption = "Source: The Guardian")
+
+afinn_time_group %>% filter(time_group == 'post_IPCC') %>% ggplot(aes(x = index, y = sentiment, fill = method)) +
+  geom_col(show.legend = FALSE)+ labs(title = "Sentiment Analysis by AFINN lexicon", 
+                                      subtitle = "post_IPCC group",
+                                      caption = "Source: The Guardian")
+
+afinn_time_group$time_group <- factor(afinn_time_group$time_group, levels = c("pre_IPCC", "post_IPCC"))
+
+afinn_time_group %>% ggplot(aes(x = time_group, y = sentiment))+
+  geom_col()+
+  labs(title = "Before and after the IPCC report release",
+       subtitle = "Sentiment Analysis on Words in Articles with 'climate' and 'change'",
+       caption = "Source: The Guardian")
+
+```
+
+
+### TF-IDF analysis
+
+The term frequency distribution has a short right tail in each group. Consequently, there are a lot of frequently used words in the articles and just a very low number of rare words are used.
+
+```{r}
+# TF-IDF
+
+# create a table, where one row is for each time_group-word combination
+df_word <- tidy_df %>% count(time_group, word, sort = TRUE)
+total_words <- df_word %>% group_by(time_group) %>% summarize(total = sum(n))
+df_word <- left_join(df_word, total_words)
+
+# term frequency distribution in each time_group --> short tails to the right, not much extremely rare words. distribution is similar in each time_group
+
+ggplot(df_word, aes(n/total, fill = time_group)) +
+  geom_histogram(show.legend = FALSE) +
+  xlim(NA, 0.0009) +
+  facet_wrap(~time_group, ncol = 2, scales = "free_y") +
+  labs(title = "Term frequency distribution in each group",
+       caption = "Source: The Guardian")
+
+```
+
+The relationship between the word frequency and its rank is inversely proportional, which is aligned with the so called Zipf's law. The dotted line shows the predicted rank for a given word frequency. We can see, that the articles contain fewer rare words than it is predicted in both of the groups. 
+
+
+```{r}
+
+# Zipf's law for Guardian articles - the rank of each word in each time_group - there is a negative relationship between rank and frequency
+freq_by_rank <- df_word %>% group_by(time_group) %>% mutate(rank = row_number(), `term frequency` = n/total) %>% ungroup()
+rank_subset <- freq_by_rank %>% 
+  filter(rank < 500,
+         rank > 10)
+
+rank_subset <- freq_by_rank %>% 
+  filter(rank < 500,
+         rank > 10)
+
+lm(log10(`term frequency`) ~ log10(rank), data = rank_subset)
+
+freq_by_rank %>% 
+  ggplot(aes(rank, `term frequency`, color = time_group)) + 
+  geom_abline(intercept = -0.62, slope = -1.1, 
+              color = "gray50", linetype = 2) +
+  geom_line(size = 1.1, alpha = 0.8, show.legend = FALSE) + 
+  scale_x_log10() +
+  scale_y_log10()
+```
+
+The TF-IDF method measures the importance of a word in the articles. We can see mostly names and places. The vocabulary of the two examined groups can be distinguished by these names and places.
+
+```{r}
+# what are the important words for the content of each time_group?
+article_tf_idf <- df_word %>% bind_tf_idf(word, time_group, n)
+
+# Highest tf-idf words in each time_group
+article_tf_idf %>%
+  group_by(time_group) %>%
+  slice_max(tf_idf, n = 15) %>%
+  ungroup() %>%
+  ggplot(aes(tf_idf, fct_reorder(word, tf_idf), fill = time_group)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~time_group, ncol = 2, scales = "free") +
+  labs(x = "tf-idf", y = NULL, title = "Highest TF-IDF words in each time group", caption = "Source: The Guardian")
+
+# this shows that the two examined time groups are distinguished by these names and places
+```
+
+### Visualizing bigrams
+
+We can visualize word pairs, which are relevant in the climate change related articles. The graph below shows word pairs, which occur more than 200 times in the articles and where neither word was a stop word. 
+
+```{r}
+# 4) tokenizing bigrams: what is the context of climate change in each group?
+
+articles_bigrams <- df %>% unnest_tokens(bigram, text, token = "ngrams", n = 2)
+
+bigrams_separated <- articles_bigrams %>% separate(bigram, c("word1", "word2"), sep = " ")
+
+bigrams_filtered <- bigrams_separated %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word)
+
+bigram_counts <- bigrams_filtered %>% 
+  count(word1, word2, sort = TRUE)
+
+bigram_graph <- bigram_counts %>%
+  filter(n > 200) %>%
+  graph_from_data_frame()
+
+set.seed(20210512)
+ggraph(bigram_graph, layout = "fr") +
+  geom_edge_link() +
+  geom_node_point() +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+  labs(title = "Common bigrams in climate change related articles",
+       caption = "Source: The Guardian")
+```
+
+The graphs below shows the bigrams within each examined group. The bigrams occurred at least 100 times in the articles in the given group. 
+
+```{r}
+
+# create separate bigram graphs for each time_group
+
+# pre
+
+df_pre <- df %>% filter(time_group == "pre_IPCC")
+
+articles_bigrams_pre <- df_pre %>% unnest_tokens(bigram, text, token = "ngrams", n = 2)
+
+bigrams_separated_pre <- articles_bigrams_pre %>% separate(bigram, c("word1", "word2"), sep = " ")
+
+bigrams_filtered_pre <- bigrams_separated_pre %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word)
+
+bigram_counts_pre <- bigrams_filtered_pre %>% 
+  count(word1, word2, sort = TRUE)
+
+bigram_graph_pre <- bigram_counts_pre %>%
+  filter(n > 100) %>%
+  graph_from_data_frame()
+
+set.seed(20210512)
+ggraph(bigram_graph_pre, layout = "fr") +
+  geom_edge_link() +
+  geom_node_point() +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+  labs(title = "Common bigrams in climate change related articles in pre_IPCC group",
+       caption = "Source: The Guardian")
+
+```
+
+In the post_IPCC group, "IPCC report" has occurred as a frequently used bigram.
+
+```{r}
+
+# post
+
+df_post <- df %>% filter(time_group == "post_IPCC")
+
+articles_bigrams_post <- df_post %>% unnest_tokens(bigram, text, token = "ngrams", n = 2)
+
+bigrams_separated_post <- articles_bigrams_post %>% separate(bigram, c("word1", "word2"), sep = " ")
+
+bigrams_filtered_post <- bigrams_separated_post %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word)
+
+bigram_counts_post <- bigrams_filtered_post %>% 
+  count(word1, word2, sort = TRUE)
+
+bigram_graph_post <- bigram_counts_post %>%
+  filter(n > 100) %>%
+  graph_from_data_frame()
+
+set.seed(20210512)
+ggraph(bigram_graph_post, layout = "fr") +
+  geom_edge_link() +
+  geom_node_point() +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+  labs(title = "Common bigrams in climate change related articles in post_IPCC group",
+       caption = "Source: The Guardian")
+
+```
+
+
+### Topic modeling
+
+We can divide the articles into natural groups. The Latent Dirichlet allocation is applied for topic modeling in current report, which treats each article as a mixture of topics, and each topic as a mixture of words. Here, four different topics are separated, which are characterized by the words below.
+
+```{r}
+
+# 5) topic modelling: What topics can be separated in each group?
+
+time_group_dtm <- tidy_df2 %>% count(time_group, word) %>% cast_dtm(time_group, word, n)
+
+# LDA
+
+time_group_lda <- LDA(time_group_dtm, k = 4, control = list(seed = 20210513))
+
+tg_topics <- tidy(time_group_lda, matrix = "beta") 
+
+# find the 10 most common terms within each topic
+
+tg_top_terms <- tg_topics %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 10) %>% 
+  ungroup() %>%
+  arrange(topic, -beta)
+tg_top_terms %>% mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  scale_y_reordered() +
+  labs(title = "Most common terms within separated topics", caption = "Source: The Guardian")
+
+```
+
+Let's see the topic modeling within the two examined groups. 
+
+```{r}
+# pre
+tidy_df2_pre <- tidy_df2 %>% filter(time_group == "pre_IPCC")
+time_group_dtm_pre <- tidy_df2_pre %>% count(time_group, word) %>% cast_dtm(time_group, word, n)
+
+# LDA
+
+time_group_lda_pre <- LDA(time_group_dtm_pre, k = 4, control = list(seed = 20210513))
+
+tg_topics_pre <- tidy(time_group_lda_pre, matrix = "beta") 
+
+# find the 10 most common terms within each topic in pre_IPCC group
+
+tg_top_terms_pre <- tg_topics_pre %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 10) %>% 
+  ungroup() %>%
+  arrange(topic, -beta)
+tg_top_terms_pre %>% mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  scale_y_reordered() +
+  labs(title = "Most common terms within separated topics in pre_IPCC group", caption = "Source: The Guardian")
+```
+
+```{r}
+
+# post
+tidy_df2_post <- tidy_df2 %>% filter(time_group == "post_IPCC")
+time_group_dtm_post <- tidy_df2_post %>% count(time_group, word) %>% cast_dtm(time_group, word, n)
+
+# LDA
+
+time_group_lda_post <- LDA(time_group_dtm_post, k = 4, control = list(seed = 20210513))
+
+tg_topics_post <- tidy(time_group_lda_post, matrix = "beta") 
+
+# find the 10 most common terms within each topic in pre_IPCC group
+
+tg_top_terms_post <- tg_topics_post %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 10) %>% 
+  ungroup() %>%
+  arrange(topic, -beta)
+tg_top_terms_post %>% mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  scale_y_reordered() +
+  labs(title = "Most common terms within separated topics in post_IPCC group", caption = "Source: The Guardian")
+
+
+```
+
+The four separated topics seem to use similar words in both examined groups.
+
+## Conclusion
+
+Current report aimed to examine climate change related articles by different methods of text analysis. The IPCC report has occurred among the common bigrams in the post_IPCC group, which supports the initial assumption that the special IPCC report affected the narrative of climate change in online media. 
+Also, the sentiment analysis showed us that after the IPCC report release, climate change related articles were tend to be more negative, than one year earlier at the same time of the year.
